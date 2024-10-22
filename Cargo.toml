@@ -12,3 +12,4 @@ vcf = "0.6.1"
 bgen_reader = { path = "../bgen_reader" }
 nom = "7.1.3"
 indicatif = "0.17.8"
+clap = { version = "4.5.20", features = ["derive"] }

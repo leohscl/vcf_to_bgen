@@ -1,6 +1,8 @@
 use bgen_reader::bgen::bgen_stream::write_samples;
 use bgen_reader::bgen::header::{Header, HeaderFlags};
 use bgen_reader::bgen::variant_data::{DataBlock, VariantData};
+use clap::Parser;
+use color_eyre::Report;
 use flate2::read::MultiGzDecoder;
 use indicatif::ProgressBar;
 use nom::bytes::complete::{is_not, tag, take, take_until, take_while1};
@@ -11,7 +13,6 @@ use nom::{IResult, InputIter};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter};
 use std::time::Duration;
-use color_eyre::Report;
 
 #[derive(Debug)]
 enum VcfError {
@@ -38,12 +39,21 @@ impl From<nom::Err<nom::error::Error<&str>>> for VcfError {
     }
 }
 
+#[derive(Parser, Debug)]
+struct Args {
+    /// Path to the input vcf file
+    #[arg(short, long)]
+    input: String,
+
+    /// Path to the output bgen file
+    #[arg(short, long)]
+    output: String,
+}
+
 fn main() -> Result<(), VcfError> {
-    let read_file = "/pasteur/zeus/projets/p02/GGS_WKD/HOME_LEO/vcf_to_bgen/data/small_2.vcf.gz";
-    // let read_file = "data/ukb24304_c1_b62_v1.vcf.gz";
-    let mut reader = BufReader::new(MultiGzDecoder::new(File::open(
-                read_file
-    )?));
+    let args = Args::parse();
+    // let read_file = "/pasteur/zeus/projets/p02/GGS_WKD/HOME_LEO/vcf_to_bgen/data/small_2.vcf.gz";
+    let mut reader = BufReader::new(MultiGzDecoder::new(File::open(&args.input)?));
     // First pass to get the number of variants
     let mut number_geno_line = 0;
     let mut variant_num = 0;
@@ -68,9 +78,7 @@ fn main() -> Result<(), VcfError> {
     drop(reader);
 
     // read file again
-    let mut reader = BufReader::new(MultiGzDecoder::new(File::open(
-                read_file
-    )?));
+    let mut reader = BufReader::new(MultiGzDecoder::new(File::open(&args.input)?));
 
     // Skip header, parse column/sample line
     let samples_result = loop {
@@ -88,7 +96,7 @@ fn main() -> Result<(), VcfError> {
     line.clear();
 
     // write bgen file
-    let mut bgen_writer = BufWriter::new(File::create("data/ukb24304_c1_b62_v1.bgen")?);
+    let mut bgen_writer = BufWriter::new(File::create(&args.output)?);
     // compute length of sample block
     let len_sample_block =
         8u32 + number_individuals * 2 + samples.iter().map(|s| s.len() as u32).sum::<u32>();
@@ -126,22 +134,39 @@ fn main() -> Result<(), VcfError> {
     for _geno_line in 0..number_geno_line {
         reader.read_line(&mut line)?;
         let mut variant_data = parse_genotype_line(&line, number_individuals)?;
-        let alt_variants: Vec<_> = variant_data.alleles[1].split(',').map(|s| s.to_string()).collect();
+        let alt_variants: Vec<_> = variant_data.alleles[1]
+            .split(',')
+            .map(|s| s.to_string())
+            .collect();
         if alt_variants.len() > 1 {
             // split multiallelic into biallelic
             for (alt_i, alt) in alt_variants.into_iter().enumerate() {
                 let mut variant_data_clone = variant_data.clone();
                 variant_data_clone.alleles[1] = alt.to_string();
-                let variant_id_fmt = format_id_with_alleles(&(variant_data.chr.to_string() + "_" + &variant_data.pos.to_string()), &variant_data.alleles[0], &alt);
+                let variant_id_fmt = format_id_with_alleles(
+                    &(variant_data.chr.to_string() + "_" + &variant_data.pos.to_string()),
+                    &variant_data.alleles[0],
+                    &alt,
+                );
                 variant_data_clone.variants_id = variant_id_fmt.clone();
                 variant_data_clone.rsid = variant_id_fmt;
                 // normalize probabilities
-                variant_data_clone.data_block.probabilities = variant_data.data_block.probabilities.chunks(2).flat_map(|g| genos_to_proba(g, alt_i as u32 + 1)).collect();
+                variant_data_clone.data_block.probabilities = variant_data
+                    .data_block
+                    .probabilities
+                    .chunks(2)
+                    .flat_map(|g| genos_to_proba(g, alt_i as u32 + 1))
+                    .collect();
                 variant_data_clone.write_self(&mut bgen_writer, 2)?;
-            };
+            }
         } else {
             // normalize probabilities
-            variant_data.data_block.probabilities = variant_data.data_block.probabilities.chunks(2).flat_map(|g| genos_to_proba(g, 1)).collect();
+            variant_data.data_block.probabilities = variant_data
+                .data_block
+                .probabilities
+                .chunks(2)
+                .flat_map(|g| genos_to_proba(g, 1))
+                .collect();
             variant_data.write_self(&mut bgen_writer, 2)?;
         }
         bar.inc(1);
@@ -152,8 +177,8 @@ fn main() -> Result<(), VcfError> {
 }
 
 fn genos_to_proba(genos: &[u32], alt_number: u32) -> Vec<u32> {
-    let left_strand = if genos[0] == alt_number {1} else {0};
-    let right_strand = if genos[1] == alt_number {1} else {0};
+    let left_strand = if genos[0] == alt_number { 1 } else { 0 };
+    let right_strand = if genos[1] == alt_number { 1 } else { 0 };
     let sum = left_strand + right_strand;
     let result = if sum == 0 {
         [65535, 0]
