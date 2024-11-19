@@ -1,5 +1,5 @@
-use vcf_to_bgen::{count_variants, convert_to_bgen, VcfError};
 use clap::Parser;
+use vcf_to_bgen::{convert_to_bgen, count_variants, VcfError};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -21,7 +21,12 @@ fn main() -> Result<(), VcfError> {
     // First pass to get the number of variants
     let (variant_num, number_geno_line) = count_variants(&args.input)?;
     // Convert to bgen, line by line
-    convert_to_bgen(&args.input, &args.output, variant_num, number_geno_line, args.num_bits.unwrap_or(8))?;
+    convert_to_bgen(
+        &args.input,
+        &args.output,
+        variant_num,
+        number_geno_line,
+        args.num_bits.unwrap_or(8),
+    )?;
     Ok(())
 }
-

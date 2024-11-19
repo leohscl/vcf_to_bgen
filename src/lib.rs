@@ -4,10 +4,12 @@ use bgen_reader::bgen::variant_data::{DataBlock, VariantData};
 use color_eyre::Report;
 use flate2::read::MultiGzDecoder;
 use indicatif::ProgressBar;
-use nom::bytes::complete::{is_not, tag, take, take_until, take_while1};
+use nom::branch::alt;
+use nom::bytes::complete::{is_not, tag, take, take_while1};
 use nom::character::complete::{alpha0, alphanumeric0, char, tab};
-use nom::multi::{many0, separated_list0};
-use nom::sequence::{preceded, terminated};
+use nom::combinator::success;
+use nom::multi::{count, many0, separated_list0};
+use nom::sequence::{delimited, preceded, terminated};
 use nom::{IResult, InputIter};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter};
@@ -79,7 +81,12 @@ pub fn read_vcf_header(reader: &mut impl BufRead) -> Result<Vec<String>, VcfErro
     Ok(samples_str.into_iter().map(|s| s.to_string()).collect())
 }
 
-pub fn write_bgen_header(bgen_writer: &mut BufWriter<std::fs::File>, samples: &[String], number_individuals: u32, variant_num: u32) -> Result<(), VcfError> {
+pub fn write_bgen_header(
+    bgen_writer: &mut BufWriter<std::fs::File>,
+    samples: &[String],
+    number_individuals: u32,
+    variant_num: u32,
+) -> Result<(), VcfError> {
     // compute length of sample block
     let len_sample_block =
         8u32 + number_individuals * 2 + samples.iter().map(|s| s.len() as u32).sum::<u32>();
@@ -106,24 +113,22 @@ pub fn write_bgen_header(bgen_writer: &mut BufWriter<std::fs::File>, samples: &[
     };
     // write header
     header.write_header(bgen_writer)?;
-        //
+    //
     // write samples
-    Ok(write_samples(&samples, bgen_writer, len_sample_block)?)
+    Ok(write_samples(samples, bgen_writer, len_sample_block)?)
 }
-pub fn convert_variant_blocks(reader: &mut impl BufRead, bgen_writer: &mut BufWriter<std::fs::File>, number_geno_line: u32, number_individuals: u32, num_bits: u8) -> Result<(), VcfError>{
-    let mut line = String::new();
 
-    let bar = ProgressBar::new(number_geno_line as u64);
-    for _geno_line in 0..number_geno_line {
-        reader.read_line(&mut line)?;
-        let mut variant_data = parse_genotype_line(&line, number_individuals, num_bits)?;
-        let alt_variants: Vec<_> = variant_data.alleles[1]
-            .split(',')
-            .map(|s| s.to_string())
-            .collect();
-        if alt_variants.len() > 1 {
-            // split multiallelic into biallelic
-            for (alt_i, alt) in alt_variants.into_iter().enumerate() {
+pub fn split_multiallelic(mut variant_data: VariantData) -> Result<Vec<VariantData>, VcfError> {
+    let alt_variants: Vec<_> = variant_data.alleles[1]
+        .split(',')
+        .map(|s| s.to_string())
+        .collect();
+    let vec_variant_data = if alt_variants.len() > 1 {
+        // split multiallelic into biallelic
+        alt_variants
+            .into_iter()
+            .enumerate()
+            .map(|(alt_i, alt)| {
                 let mut variant_data_clone = variant_data.clone();
                 variant_data_clone.alleles[1] = alt.to_string();
                 let variant_id_fmt = format_id_with_alleles(
@@ -140,17 +145,39 @@ pub fn convert_variant_blocks(reader: &mut impl BufRead, bgen_writer: &mut BufWr
                     .chunks(2)
                     .flat_map(|g| genos_to_proba(g, alt_i as u32 + 1))
                     .collect();
-                variant_data_clone.write_self(bgen_writer, 2)?;
-            }
-        } else {
-            // normalize probabilities
-            variant_data.data_block.probabilities = variant_data
-                .data_block
-                .probabilities
-                .chunks(2)
-                .flat_map(|g| genos_to_proba(g, 1))
-                .collect();
-            variant_data.write_self(bgen_writer, 2)?;
+                variant_data_clone
+            })
+            .collect()
+    } else {
+        // normalize probabilities
+        variant_data.data_block.probabilities = variant_data
+            .data_block
+            .probabilities
+            .chunks(2)
+            .flat_map(|g| genos_to_proba(g, 1))
+            .collect();
+        [variant_data].to_vec()
+    };
+    Ok(vec_variant_data)
+}
+
+pub fn convert_variant_blocks(
+    reader: &mut impl BufRead,
+    bgen_writer: &mut BufWriter<std::fs::File>,
+    number_geno_line: u32,
+    number_individuals: u32,
+    num_bits: u8,
+) -> Result<(), VcfError> {
+    let mut line = String::new();
+
+    let bar = ProgressBar::new(number_geno_line as u64);
+
+    for _geno_line in 0..number_geno_line {
+        reader.read_line(&mut line)?;
+        let variant_data = parse_genotype_line(&line, number_individuals, num_bits)?;
+        let vec_variant_data = split_multiallelic(variant_data)?;
+        for var_data in vec_variant_data {
+            var_data.write_self(bgen_writer, 2)?;
         }
         bar.inc(1);
         line.clear();
@@ -159,22 +186,35 @@ pub fn convert_variant_blocks(reader: &mut impl BufRead, bgen_writer: &mut BufWr
     Ok(())
 }
 
-pub fn convert_to_bgen(input: &str, output: &str, variant_num: u32, number_geno_line: u32, num_bits: u8) -> Result<(), VcfError> {
+pub fn convert_to_bgen(
+    input: &str,
+    output: &str,
+    variant_num: u32,
+    number_geno_line: u32,
+    num_bits: u8,
+) -> Result<(), VcfError> {
     // reads vcf
     let mut reader = BufReader::new(MultiGzDecoder::new(File::open(input)?));
     // writes bgen
     let mut bgen_writer = BufWriter::new(File::create(output)?);
 
+    // get samples from header
     let samples = read_vcf_header(&mut reader)?;
     let number_individuals = samples.len() as u32;
 
     // write header and samples
     write_bgen_header(&mut bgen_writer, &samples, number_individuals, variant_num)?;
+
     // write variant blocks
     println!("Converting variants to bgen format");
-    convert_variant_blocks(&mut reader, &mut bgen_writer, number_geno_line, number_individuals, num_bits)
+    convert_variant_blocks(
+        &mut reader,
+        &mut bgen_writer,
+        number_geno_line,
+        number_individuals,
+        num_bits,
+    )
 }
-
 
 fn genos_to_proba(genos: &[u32], alt_number: u32) -> Vec<u32> {
     let left_strand = if genos[0] == alt_number { 1 } else { 0 };
@@ -210,7 +250,11 @@ fn alt_allele_count(input: &str) -> Result<u32, VcfError> {
     Ok(alt_alleles.chars().filter(|&c| c == ',').count() as u32 + 1)
 }
 
-fn parse_genotype_line(input: &str, number_individuals: u32, num_bits: u8) -> Result<VariantData, VcfError> {
+pub fn parse_genotype_line(
+    input: &str,
+    number_individuals: u32,
+    num_bits: u8,
+) -> Result<VariantData, VcfError> {
     let (remaining_input, chr) = parse_one_field(input)?;
     let (remaining_input, pos) = parse_one_field(remaining_input)?;
     let (remaining_input, variant_id) = parse_one_field(remaining_input)?;
@@ -269,14 +313,34 @@ fn parse_genotype_line(input: &str, number_individuals: u32, num_bits: u8) -> Re
     Ok(variant_data)
 }
 
+fn parser_elt_tab(input: &str) -> IResult<&str, &str> {
+    let until_tab = take_while1(|c| c != '\t');
+    terminated(until_tab, tab)(input)
+}
+
+fn parser_elt_colon(input: &str) -> IResult<&str, &str> {
+    terminated(is_not(":"), tag(":"))(input)
+}
+
 fn parse_genotype_field(input: &str) -> IResult<&str, Vec<&str>> {
-    let geno_start = "GT:AD:MD:DP:GQ:PL";
-    // parse line until genotype starts
-    let before_genotype_parser = preceded(preceded(take_until(geno_start), tag(geno_start)), tab);
-    // parse genotype from list of values
-    let parse_geno = terminated(take(3u8), take_while1(|c| c != '\t'));
-    // parse whole line
-    preceded(before_genotype_parser, separated_list0(tab, parse_geno))(input)
+    // let until_tab = take_while1(|c| c != '\t');
+    // Genotype starts at column 9, 5 lines are already read
+    let mut before_genotype_parser = preceded(count(parser_elt_tab, 3), parser_elt_tab);
+    // Gives Format field, and remaining line is left to parse
+    let parse_line_start = before_genotype_parser(input).unwrap();
+    // Format like GT:GP..
+    let remaining_string = parse_line_start.0;
+    let format = parse_line_start.1;
+    let gt_position = format.split(':').position(|s| s == "GT").unwrap();
+    dbg!(gt_position);
+
+    // let parse_geno = delimited(count(parser_elt_colon, gt_position), take(3u8), is_not("\t"));
+    let parse_geno = delimited(
+        count(parser_elt_colon, gt_position),
+        take(3u8),
+        alt((is_not("\t"), success("1"))),
+    );
+    separated_list0(tab, parse_geno)(remaining_string)
 }
 
 fn format_id_with_alleles(id: &str, a1: &str, a2: &str) -> String {
