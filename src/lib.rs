@@ -40,6 +40,12 @@ impl From<nom::Err<nom::error::Error<&str>>> for VcfError {
     }
 }
 
+// Wrapper type for variant data, with added genotype represented as vcf string
+pub struct VariantDataToParse<'a> {
+    variant_data: VariantData,
+    geno_string_vcf: Vec<&'a str>,
+}
+
 pub fn count_variants(input: &str) -> Result<(u32, u32), VcfError> {
     let mut reader = BufReader::new(MultiGzDecoder::new(File::open(input)?));
     let mut number_geno_line = 0;
@@ -118,46 +124,80 @@ pub fn write_bgen_header(
     Ok(write_samples(samples, bgen_writer, len_sample_block)?)
 }
 
-pub fn split_multiallelic(mut variant_data: VariantData) -> Result<Vec<VariantData>, VcfError> {
+pub fn parse_geno_line(
+    geno_line: &[&str],
+    alt_allele_num: usize,
+    num_bits: u8,
+) -> (Vec<u32>, Vec<u8>) {
+    let mut vec_probas = vec![];
+    let mut vec_ploidy_m = vec![];
+
+    geno_line.into_iter().for_each(|geno_s| {
+        let mut geno_iter = geno_s
+            .iter_elements()
+            .filter_map(|c| c.to_digit(10))
+            .filter(|&d| d == 0 || d == alt_allele_num as u32)
+            .map(|d| if d == 0 { 0 } else { 1 });
+        let count_valid = geno_iter.clone().count();
+        // if there is less than 2 values, there is missingness
+        let ploidy_m = if count_valid < 2 { (1u8 << 7) + 2 } else { 2u8 };
+        let left_strand = geno_iter.next().unwrap_or(0);
+        let right_strand = geno_iter.next().unwrap_or(0);
+        let genos = [left_strand, right_strand];
+        // convert geno to bgen probabilities
+        let probas = genos_to_proba(&genos, num_bits);
+        vec_probas.extend(probas);
+        vec_ploidy_m.push(ploidy_m);
+    });
+    (vec_probas, vec_ploidy_m)
+}
+
+pub fn parse_vcf_geno<'a>(
+    variant_data_to_parse: &VariantDataToParse<'a>,
+    alt_allele: String,
+    alt_allele_num: usize,
+    num_bits: u8,
+) -> VariantData {
+    // use variant data as pattern
+    let mut variant_data_clone = variant_data_to_parse.variant_data.clone();
+
+    // fill description fields
+    let variant_id_fmt = format_id_with_alleles(
+        &(variant_data_clone.chr.to_string() + ":" + &variant_data_clone.pos.to_string()),
+        &variant_data_clone.alleles[0],
+        &alt_allele,
+    );
+    variant_data_clone.variants_id = variant_id_fmt.clone();
+    variant_data_clone.alleles[1] = alt_allele;
+    variant_data_clone.rsid = variant_id_fmt;
+
+    // convert string to missingness and probas
+    let (probabilities, ploidy_missingness) = parse_geno_line(
+        &variant_data_to_parse.geno_string_vcf,
+        alt_allele_num,
+        num_bits,
+    );
+    variant_data_clone.data_block.ploidy_missingness = ploidy_missingness;
+    variant_data_clone.data_block.probabilities = probabilities;
+    variant_data_clone
+}
+
+pub fn split_multiallelic<'a>(
+    variant_data_to_parse: VariantDataToParse<'a>,
+) -> Result<Vec<VariantData>, VcfError> {
+    let variant_data = &variant_data_to_parse.variant_data;
+
     let alt_variants: Vec<_> = variant_data.alleles[1]
         .split(',')
         .map(|s| s.to_string())
         .collect();
-    let vec_variant_data = if alt_variants.len() > 1 {
-        // split multiallelic into biallelic
-        alt_variants
-            .into_iter()
-            .enumerate()
-            .map(|(alt_i, alt)| {
-                let mut variant_data_clone = variant_data.clone();
-                variant_data_clone.alleles[1] = alt.to_string();
-                let variant_id_fmt = format_id_with_alleles(
-                    &(variant_data.chr.to_string() + ":" + &variant_data.pos.to_string()),
-                    &variant_data.alleles[0],
-                    &alt,
-                );
-                variant_data_clone.variants_id = variant_id_fmt.clone();
-                variant_data_clone.rsid = variant_id_fmt;
-                // normalize probabilities
-                variant_data_clone.data_block.probabilities = variant_data
-                    .data_block
-                    .probabilities
-                    .chunks(2)
-                    .flat_map(|g| genos_to_proba(g, alt_i as u32 + 1))
-                    .collect();
-                variant_data_clone
-            })
-            .collect()
-    } else {
-        // normalize probabilities
-        variant_data.data_block.probabilities = variant_data
-            .data_block
-            .probabilities
-            .chunks(2)
-            .flat_map(|g| genos_to_proba(g, 1))
-            .collect();
-        [variant_data].to_vec()
-    };
+    let num_bits = variant_data.data_block.bits_storage;
+    // split multiallelic into biallelic
+    let vec_variant_data = alt_variants
+        .into_iter()
+        .enumerate()
+        .map(|(alt_i, alt)| parse_vcf_geno(&variant_data_to_parse, alt, alt_i + 1, num_bits))
+        .collect::<Vec<VariantData>>();
     Ok(vec_variant_data)
 }
 
@@ -216,14 +256,13 @@ pub fn convert_to_bgen(
     )
 }
 
-fn genos_to_proba(genos: &[u32], alt_number: u32) -> Vec<u32> {
-    let left_strand = if genos[0] == alt_number { 1 } else { 0 };
-    let right_strand = if genos[1] == alt_number { 1 } else { 0 };
-    let sum = left_strand + right_strand;
+fn genos_to_proba(genos: &[u32], num_bits: u8) -> Vec<u32> {
+    let sum = genos[0] + genos[1];
+    let proba_1 = (1 << num_bits) - 1;
     let result = if sum == 0 {
-        [65535, 0]
+        [proba_1, 0]
     } else if sum == 1 {
-        [0, 65535]
+        [0, proba_1]
     } else {
         [0, 0]
     };
@@ -250,11 +289,11 @@ fn alt_allele_count(input: &str) -> Result<u32, VcfError> {
     Ok(alt_alleles.chars().filter(|&c| c == ',').count() as u32 + 1)
 }
 
-pub fn parse_genotype_line(
-    input: &str,
+pub fn parse_genotype_line<'a>(
+    input: &'a str,
     number_individuals: u32,
     num_bits: u8,
-) -> Result<VariantData, VcfError> {
+) -> Result<VariantDataToParse<'a>, VcfError> {
     let (remaining_input, chr) = parse_one_field(input)?;
     let (remaining_input, pos) = parse_one_field(remaining_input)?;
     let (remaining_input, variant_id) = parse_one_field(remaining_input)?;
@@ -262,39 +301,16 @@ pub fn parse_genotype_line(
     let (remaining_input, a2) = parse_one_field(remaining_input)?;
     let genos_string = parse_genotype_field(remaining_input)?.1;
     let variant_id_fmt = format_id_with_alleles(variant_id, a1, a2);
-    // dbg!(&genos_string);
-    let ploidy_missingness = genos_string
-        .iter()
-        .map(|geno_s| {
-            // 2 if for ploidy
-            if geno_s.contains('.') {
-                (1u8 << 7) + 2
-            } else {
-                2u8
-            }
-        })
-        .collect();
-
-    let probabilities = genos_string
-        .into_iter()
-        .flat_map(|geno_s| {
-            let mut geno_iter = geno_s.iter_elements().filter_map(|c| c.to_digit(10));
-            let left_strand = geno_iter.next().unwrap_or(0);
-            let right_strand = geno_iter.nth(1).unwrap_or(0);
-            [left_strand, right_strand]
-        })
-        .collect();
-
     //TODO: fix ploidy_missingness, not correctly read from data
     let data_block = DataBlock {
         number_individuals,
         number_alleles: 2,
         minimum_ploidy: 2,
         maximum_ploidy: 2,
-        ploidy_missingness,
+        ploidy_missingness: vec![],
         phased: false,
         bits_storage: num_bits,
-        probabilities,
+        probabilities: vec![],
     };
 
     //TODO: fix size_in_bytes, alleles if multiallelic ?
@@ -310,7 +326,11 @@ pub fn parse_genotype_line(
         size_in_bytes: 0,
         data_block,
     };
-    Ok(variant_data)
+    let variant_data_to_parse = VariantDataToParse {
+        variant_data,
+        geno_string_vcf: genos_string,
+    };
+    Ok(variant_data_to_parse)
 }
 
 fn parser_elt_tab(input: &str) -> IResult<&str, &str> {
@@ -332,7 +352,6 @@ fn parse_genotype_field(input: &str) -> IResult<&str, Vec<&str>> {
     let remaining_string = parse_line_start.0;
     let format = parse_line_start.1;
     let gt_position = format.split(':').position(|s| s == "GT").unwrap();
-    dbg!(gt_position);
 
     // let parse_geno = delimited(count(parser_elt_colon, gt_position), take(3u8), is_not("\t"));
     let parse_geno = delimited(
