@@ -132,7 +132,7 @@ pub fn parse_geno_line(
     let mut vec_probas = vec![];
     let mut vec_ploidy_m = vec![];
 
-    geno_line.into_iter().for_each(|geno_s| {
+    geno_line.iter().for_each(|geno_s| {
         let mut geno_iter = geno_s
             .iter_elements()
             .filter_map(|c| c.to_digit(10))
@@ -152,8 +152,8 @@ pub fn parse_geno_line(
     (vec_probas, vec_ploidy_m)
 }
 
-pub fn parse_vcf_geno<'a>(
-    variant_data_to_parse: &VariantDataToParse<'a>,
+pub fn parse_vcf_geno(
+    variant_data_to_parse: &VariantDataToParse<'_>,
     alt_allele: String,
     alt_allele_num: usize,
     num_bits: u8,
@@ -182,8 +182,8 @@ pub fn parse_vcf_geno<'a>(
     variant_data_clone
 }
 
-pub fn split_multiallelic<'a>(
-    variant_data_to_parse: VariantDataToParse<'a>,
+pub fn split_multiallelic(
+    variant_data_to_parse: VariantDataToParse<'_>,
 ) -> Result<Vec<VariantData>, VcfError> {
     let variant_data = &variant_data_to_parse.variant_data;
 
@@ -289,11 +289,11 @@ fn alt_allele_count(input: &str) -> Result<u32, VcfError> {
     Ok(alt_alleles.chars().filter(|&c| c == ',').count() as u32 + 1)
 }
 
-pub fn parse_genotype_line<'a>(
-    input: &'a str,
+pub fn parse_genotype_line(
+    input: &str,
     number_individuals: u32,
     num_bits: u8,
-) -> Result<VariantDataToParse<'a>, VcfError> {
+) -> Result<VariantDataToParse<'_>, VcfError> {
     let (remaining_input, chr) = parse_one_field(input)?;
     let (remaining_input, pos) = parse_one_field(remaining_input)?;
     let (remaining_input, variant_id) = parse_one_field(remaining_input)?;
