@@ -25,14 +25,15 @@ fn read_one_line() {
     let input = "data/100_vars_chr22_HG.vcf.gz";
     // reads header
     let mut reader = BufReader::new(MultiGzDecoder::new(File::open(input).unwrap()));
-    let _samples = read_vcf_header(&mut reader).unwrap();
+    let samples = read_vcf_header(&mut reader).unwrap();
     // read first line
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     let num_bits = 16;
-    let number_individuals = 2504;
+    let number_individuals = 2548;
+    assert_eq!(number_individuals as usize, samples.len());
     let variant_data = parse_genotype_line(&line, number_individuals, num_bits).unwrap();
-    let vec_variant_data = split_multiallelic(variant_data).unwrap();
+    let vec_variant_data = split_multiallelic(variant_data, number_individuals).unwrap();
     assert_eq!(
         vec_variant_data[0].data_block.probabilities[0..10],
         [65535, 0, 65535, 0, 65535, 0, 65535, 0, 65535, 0].to_vec()
@@ -44,14 +45,15 @@ fn read_one_line_2_field_format() {
     let input = "data/1_var_10_ind.vcf.gz";
     // reads header
     let mut reader = BufReader::new(MultiGzDecoder::new(File::open(input).unwrap()));
-    let _samples = read_vcf_header(&mut reader).unwrap();
+    let samples = read_vcf_header(&mut reader).unwrap();
     // read first line
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     let num_bits = 8;
     let number_individuals = 10;
+    assert_eq!(number_individuals as usize, samples.len());
     let variant_data = parse_genotype_line(&line, number_individuals, num_bits).unwrap();
-    let vec_variant_data = split_multiallelic(variant_data).unwrap();
+    let vec_variant_data = split_multiallelic(variant_data, number_individuals).unwrap();
     assert_eq!(
         vec_variant_data[0].data_block.probabilities[0..10],
         [255, 0, 255, 0, 255, 0, 255, 0, 255, 0].to_vec()
@@ -63,14 +65,15 @@ fn read_one_line_complicated_format() {
     let input = "data/complicated_format.vcf.gz";
     // reads header
     let mut reader = BufReader::new(MultiGzDecoder::new(File::open(input).unwrap()));
-    let _samples = read_vcf_header(&mut reader).unwrap();
+    let samples = read_vcf_header(&mut reader).unwrap();
     // read first line
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     let num_bits = 8;
     let number_individuals = 10;
+    assert_eq!(number_individuals as usize, samples.len());
     let variant_data = parse_genotype_line(&line, number_individuals, num_bits).unwrap();
-    let vec_variant_data = split_multiallelic(variant_data).unwrap();
+    let vec_variant_data = split_multiallelic(variant_data, number_individuals).unwrap();
     assert_eq!(
         vec_variant_data[0].data_block.probabilities[0..10],
         [255, 0, 255, 0, 255, 0, 255, 0, 255, 0].to_vec()
@@ -82,14 +85,15 @@ fn read_one_line_missing_values() {
     let input = "data/1_var_10_ind_with_missing.vcf.gz";
     // reads header
     let mut reader = BufReader::new(MultiGzDecoder::new(File::open(input).unwrap()));
-    let _samples = read_vcf_header(&mut reader).unwrap();
+    let samples = read_vcf_header(&mut reader).unwrap();
     // read first line
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     let num_bits = 8;
     let number_individuals = 10;
+    assert_eq!(number_individuals as usize, samples.len());
     let variant_data = parse_genotype_line(&line, number_individuals, num_bits).unwrap();
-    let vec_variant_data = split_multiallelic(variant_data).unwrap();
+    let vec_variant_data = split_multiallelic(variant_data, number_individuals).unwrap();
     // probabilities are not impacted by missing values
     assert_eq!(
         vec_variant_data[0].data_block.probabilities[0..10],
@@ -106,14 +110,15 @@ fn read_one_line_multiallelic() {
     let input = "data/multiallelic_1_var.vcf.gz";
     // reads header
     let mut reader = BufReader::new(MultiGzDecoder::new(File::open(input).unwrap()));
-    let _samples = read_vcf_header(&mut reader).unwrap();
+    let samples = read_vcf_header(&mut reader).unwrap();
     // read first line
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     let num_bits = 8;
     let number_individuals = 10;
+    assert_eq!(number_individuals as usize, samples.len());
     let variant_data = parse_genotype_line(&line, number_individuals, num_bits).unwrap();
-    let vec_variant_data = split_multiallelic(variant_data).unwrap();
+    let vec_variant_data = split_multiallelic(variant_data, number_individuals).unwrap();
     assert_eq!(
         vec_variant_data[0].data_block.probabilities[0..10],
         vec![255, 0, 255, 0, 0, 255, 255, 0, 255, 0]

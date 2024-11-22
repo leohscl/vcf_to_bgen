@@ -7,9 +7,9 @@ edition = "2021"
 
 [dependencies]
 color-eyre = "0.6.3"
-flate2 = "1.0.34"
+flate2 = { version = "1.0.34", features = ["zlib-ng"], default-features = false }
 vcf = "0.6.1"
-bgen_reader = { path = "../bgen_reader" }
+bgen_reader = { path = "bgen_reader" }
 nom = "7.1.3"
 indicatif = "0.17.8"
 clap = { version = "4.5.20", features = ["derive"] }

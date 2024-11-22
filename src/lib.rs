@@ -5,7 +5,7 @@ use color_eyre::Report;
 use flate2::read::MultiGzDecoder;
 use indicatif::ProgressBar;
 use nom::branch::alt;
-use nom::bytes::complete::{is_not, tag, take, take_while1};
+use nom::bytes::complete::{is_not, tag, take, take_while1, take_until};
 use nom::character::complete::{alpha0, alphanumeric0, char, tab};
 use nom::combinator::success;
 use nom::multi::{count, many0, separated_list0};
@@ -125,14 +125,13 @@ pub fn write_bgen_header(
 }
 
 pub fn parse_geno_line(
+    vec_probas: &mut [u32],
+    vec_ploidy_m: &mut [u8],
     geno_line: &[&str],
     alt_allele_num: usize,
     num_bits: u8,
-) -> (Vec<u32>, Vec<u8>) {
-    let mut vec_probas = vec![];
-    let mut vec_ploidy_m = vec![];
-
-    geno_line.iter().for_each(|geno_s| {
+) {
+    geno_line.iter().enumerate().for_each(|(geno_i, geno_s)| {
         let mut geno_iter = geno_s
             .iter_elements()
             .filter_map(|c| c.to_digit(10))
@@ -146,10 +145,10 @@ pub fn parse_geno_line(
         let genos = [left_strand, right_strand];
         // convert geno to bgen probabilities
         let probas = genos_to_proba(&genos, num_bits);
-        vec_probas.extend(probas);
-        vec_ploidy_m.push(ploidy_m);
+        vec_probas[geno_i * 2] = probas[0];
+        vec_probas[geno_i * 2 + 1] = probas[1];
+        vec_ploidy_m[geno_i] = ploidy_m;
     });
-    (vec_probas, vec_ploidy_m)
 }
 
 pub fn parse_vcf_geno(
@@ -157,7 +156,9 @@ pub fn parse_vcf_geno(
     alt_allele: String,
     alt_allele_num: usize,
     num_bits: u8,
+    number_individuals: u32,
 ) -> VariantData {
+    let number_individuals = number_individuals as usize;
     // use variant data as pattern
     let mut variant_data_clone = variant_data_to_parse.variant_data.clone();
 
@@ -171,8 +172,13 @@ pub fn parse_vcf_geno(
     variant_data_clone.alleles[1] = alt_allele;
     variant_data_clone.rsid = variant_id_fmt;
 
+    let mut ploidy_missingness = vec![0; number_individuals];
+    let mut probabilities = vec![0; number_individuals * 2];
+
     // convert string to missingness and probas
-    let (probabilities, ploidy_missingness) = parse_geno_line(
+    parse_geno_line(
+        &mut probabilities,
+        &mut ploidy_missingness,
         &variant_data_to_parse.geno_string_vcf,
         alt_allele_num,
         num_bits,
@@ -184,6 +190,7 @@ pub fn parse_vcf_geno(
 
 pub fn split_multiallelic(
     variant_data_to_parse: VariantDataToParse<'_>,
+    number_individuals: u32
 ) -> Result<Vec<VariantData>, VcfError> {
     let variant_data = &variant_data_to_parse.variant_data;
 
@@ -196,7 +203,7 @@ pub fn split_multiallelic(
     let vec_variant_data = alt_variants
         .into_iter()
         .enumerate()
-        .map(|(alt_i, alt)| parse_vcf_geno(&variant_data_to_parse, alt, alt_i + 1, num_bits))
+        .map(|(alt_i, alt)| parse_vcf_geno(&variant_data_to_parse, alt, alt_i + 1, num_bits, number_individuals))
         .collect::<Vec<VariantData>>();
     Ok(vec_variant_data)
 }
@@ -215,7 +222,7 @@ pub fn convert_variant_blocks(
     for _geno_line in 0..number_geno_line {
         reader.read_line(&mut line)?;
         let variant_data = parse_genotype_line(&line, number_individuals, num_bits)?;
-        let vec_variant_data = split_multiallelic(variant_data)?;
+        let vec_variant_data = split_multiallelic(variant_data, number_individuals)?;
         for var_data in vec_variant_data {
             var_data.write_self(bgen_writer, 2)?;
         }
@@ -301,7 +308,6 @@ pub fn parse_genotype_line(
     let (remaining_input, a2) = parse_one_field(remaining_input)?;
     let genos_string = parse_genotype_field(remaining_input)?.1;
     let variant_id_fmt = format_id_with_alleles(variant_id, a1, a2);
-    //TODO: fix ploidy_missingness, not correctly read from data
     let data_block = DataBlock {
         number_individuals,
         number_alleles: 2,
@@ -343,7 +349,27 @@ fn parser_elt_colon(input: &str) -> IResult<&str, &str> {
 }
 
 fn parse_genotype_field(input: &str) -> IResult<&str, Vec<&str>> {
-    // let until_tab = take_while1(|c| c != '\t');
+    //// V1
+    //let geno_start = "GT:AD:MD:DP:GQ:PL";
+    //// parse line until genotype starts
+    //let before_genotype_parser = preceded(preceded(take_until(geno_start), tag(geno_start)), tab);
+    //// parse genotype from list of values
+    //let parse_geno = terminated(take(3u8), take_while1(|c| c != '\t'));
+    //// parse whole line
+    //preceded(before_genotype_parser, separated_list0(tab, parse_geno))(input)
+
+    //// V2
+    //let geno_start = "GT:AD:MD:DP:GQ:PL";
+    //// parse line until genotype starts
+    //let before_genotype_parser = preceded(preceded(take_until(geno_start), tag(geno_start)), tab);
+    //// parse genotype from list of values
+    //let parse_geno = terminated(take(3u8), is_not("\t"));
+    //// parse whole line
+    //preceded(before_genotype_parser, separated_list0(tab, parse_geno))(input)
+
+
+    // V3
+    let until_tab = take_while1(|c| c != '\t');
     // Genotype starts at column 9, 5 lines are already read
     let mut before_genotype_parser = preceded(count(parser_elt_tab, 3), parser_elt_tab);
     // Gives Format field, and remaining line is left to parse
@@ -357,7 +383,7 @@ fn parse_genotype_field(input: &str) -> IResult<&str, Vec<&str>> {
     let parse_geno = delimited(
         count(parser_elt_colon, gt_position),
         take(3u8),
-        alt((is_not("\t"), success("1"))),
+        alt((until_tab, success("1"))),
     );
     separated_list0(tab, parse_geno)(remaining_string)
 }
