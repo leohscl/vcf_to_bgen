@@ -136,3 +136,43 @@ fn read_one_line_multiallelic() {
         [2, 2, 130, 2, 2, 2, 2, 130, 2, 2].to_vec()
     );
 }
+
+#[test]
+fn read_one_line_multiallelic_3_alt() {
+    let input = "data/multiallelic_1_var_3_alt_allele.vcf.gz";
+    // reads header
+    let mut reader = BufReader::new(MultiGzDecoder::new(File::open(input).unwrap()));
+    let samples = read_vcf_header(&mut reader).unwrap();
+    // read first line
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let num_bits = 8;
+    let number_individuals = 10;
+    assert_eq!(number_individuals as usize, samples.len());
+    let variant_data = parse_genotype_line(&line, number_individuals, num_bits).unwrap();
+    let vec_variant_data = split_multiallelic(variant_data, number_individuals).unwrap();
+    assert_eq!(
+        vec_variant_data[0].data_block.probabilities[0..10],
+        vec![255, 0, 255, 0, 0, 255, 255, 0, 255, 0]
+    );
+    assert_eq!(
+        vec_variant_data[0].data_block.ploidy_missingness[0..10],
+        [2, 130, 2, 130, 130, 2, 2, 2, 2, 130].to_vec()
+    );
+    assert_eq!(
+        vec_variant_data[1].data_block.probabilities[0..10],
+        vec![255, 0, 0, 255, 255, 0, 255, 0, 0, 255]
+    );
+    assert_eq!(
+        vec_variant_data[1].data_block.ploidy_missingness[0..10],
+        [2, 2, 130, 130, 2, 2, 2, 130, 2, 130].to_vec()
+    );
+    assert_eq!(
+        vec_variant_data[2].data_block.probabilities[0..10],
+        vec![255, 0, 255, 0, 255, 0, 0, 255, 255, 0]
+    );
+    assert_eq!(
+        vec_variant_data[2].data_block.ploidy_missingness[0..10],
+        [2, 130, 130, 2, 130, 2, 2, 130, 2, 2].to_vec()
+    );
+}
