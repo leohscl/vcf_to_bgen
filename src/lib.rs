@@ -5,7 +5,7 @@ use color_eyre::Report;
 use flate2::read::MultiGzDecoder;
 use indicatif::ProgressBar;
 use nom::branch::alt;
-use nom::bytes::complete::{is_not, tag, take, take_while1, take_until};
+use nom::bytes::complete::{is_not, tag, take, take_while1};
 use nom::character::complete::{alpha0, alphanumeric0, char, tab};
 use nom::combinator::success;
 use nom::multi::{count, many0, separated_list0};
