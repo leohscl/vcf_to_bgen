@@ -27,6 +27,5 @@ fn main() -> Result<(), VcfError> {
         variant_num,
         number_geno_line,
         args.num_bits.unwrap_or(8),
-    )?;
-    Ok(())
+    )
 }

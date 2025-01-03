@@ -117,9 +117,10 @@ pub fn write_bgen_header(
         sample_num: number_individuals,
         header_flags,
     };
+
     // write header
     header.write_header(bgen_writer)?;
-    //
+
     // write samples
     Ok(write_samples(samples, bgen_writer, len_sample_block)?)
 }
@@ -319,7 +320,6 @@ pub fn parse_genotype_line(
         probabilities: vec![],
     };
 
-    //TODO: fix size_in_bytes, alleles if multiallelic ?
     let variant_data = VariantData {
         number_individuals: Some(number_individuals),
         variants_id: variant_id_fmt.to_string(),
@@ -349,26 +349,6 @@ fn parser_elt_colon(input: &str) -> IResult<&str, &str> {
 }
 
 fn parse_genotype_field(input: &str) -> IResult<&str, Vec<&str>> {
-    //// V1
-    //let geno_start = "GT:AD:MD:DP:GQ:PL";
-    //// parse line until genotype starts
-    //let before_genotype_parser = preceded(preceded(take_until(geno_start), tag(geno_start)), tab);
-    //// parse genotype from list of values
-    //let parse_geno = terminated(take(3u8), take_while1(|c| c != '\t'));
-    //// parse whole line
-    //preceded(before_genotype_parser, separated_list0(tab, parse_geno))(input)
-
-    //// V2
-    //let geno_start = "GT:AD:MD:DP:GQ:PL";
-    //// parse line until genotype starts
-    //let before_genotype_parser = preceded(preceded(take_until(geno_start), tag(geno_start)), tab);
-    //// parse genotype from list of values
-    //let parse_geno = terminated(take(3u8), is_not("\t"));
-    //// parse whole line
-    //preceded(before_genotype_parser, separated_list0(tab, parse_geno))(input)
-
-
-    // V3
     let until_tab = take_while1(|c| c != '\t');
     // Genotype starts at column 9, 5 lines are already read
     let mut before_genotype_parser = preceded(count(parser_elt_tab, 3), parser_elt_tab);
